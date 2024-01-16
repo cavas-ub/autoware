@@ -69,25 +69,34 @@ private:
    void controlCallback(const autoware_auto_control_msgs::msg::AckermannControlCommand::SharedPtr msg)
     {
         // Throttle
+        float k;
+        float throttle_gain_;
+        float brake_gain_;
+        throttle_gain_ = 1.0;
+        brake_gain_ = 1.0;
+        throttle_gain_ = std::clamp<float>(throttle_gain_, 0, 1);
+        
         dbw_ford_msgs::msg::ThrottleCmd throttle_msg;
         throttle_msg.pedal_cmd = msg->longitudinal.speed;
         if(joy_throttle_valid) {
-            throttle_msg.pedal_cmd += 0.5 - 0.5 * joy_.axes[AXIS_THROTTLE];
+            k = 0.5 - 0.5 * joy_.axes[AXIS_THROTTLE];
         }
         throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PERCENT;
         throttle_msg.enable = true;
+        throttle_msg.pedal_cmd = k * throttle_gain_; 
         throttle_publisher_->publish(throttle_msg);
 
         // Brake
         float brake_value = msg->longitudinal.acceleration < 0 ? -msg->longitudinal.acceleration : 0;
         if(joy_brake_valid) {
-            brake_value += 0.5 - 0.5 * joy_.axes[AXIS_BRAKE];
+            brake_value = 0.5 - 0.5 * joy_.axes[AXIS_BRAKE];
         }
         if(brake_value > 0) {
             dbw_ford_msgs::msg::BrakeCmd brake_msg;
             brake_msg.pedal_cmd = brake_value;
             brake_msg.pedal_cmd_type = dbw_ford_msgs::msg::BrakeCmd::CMD_PERCENT;
             brake_msg.enable = true;
+            brake_msg.pedal_cmd = brake_value * brake_gain_;
             brake_publisher_->publish(brake_msg);
         }
 
@@ -100,6 +109,7 @@ private:
         steering_msg.steering_wheel_angle_velocity = msg->lateral.steering_tire_rotation_rate;
         steering_msg.cmd_type = dbw_ford_msgs::msg::SteeringCmd::CMD_ANGLE;
         steering_msg.enable = true;
+        
         steering_publisher_->publish(steering_msg);
     }
 

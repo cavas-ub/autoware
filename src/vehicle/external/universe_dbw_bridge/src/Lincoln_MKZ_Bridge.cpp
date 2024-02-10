@@ -1,5 +1,6 @@
 // Author: DeeKay Goswami
 
+#include <iostream>
 #include "rclcpp/rclcpp.hpp"
 #include "autoware_auto_vehicle_msgs/msg/gear_command.hpp"
 #include "autoware_auto_control_msgs/msg/ackermann_control_command.hpp"
@@ -13,6 +14,7 @@
 #include "dbw_ford_msgs/msg/gear_report.hpp"
 #include "dbw_ford_msgs/msg/steering_report.hpp"
 #include "sensor_msgs/msg/joy.hpp"
+using namespace std;
 
 class Lincoln_MKZ_Bridge : public rclcpp::Node
 {
@@ -58,6 +60,7 @@ private:
    const size_t AXIS_STEER = 3;
    bool joy_throttle_valid = false;
    bool joy_brake_valid = false;
+   float dummy_steering = 1.0;
 
    void gearCallback(const autoware_auto_vehicle_msgs::msg::GearCommand::SharedPtr msg)
    {
@@ -69,24 +72,35 @@ private:
    void controlCallback(const autoware_auto_control_msgs::msg::AckermannControlCommand::SharedPtr msg)
     {
         // Throttle
-        float k;
-        float throttle_gain_;
-        float brake_gain_;
-        throttle_gain_ = 1.0;
-        brake_gain_ = 1.0;
-        throttle_gain_ = std::clamp<float>(throttle_gain_, 0, 1);
-        
-        dbw_ford_msgs::msg::ThrottleCmd throttle_msg;
-        throttle_msg.pedal_cmd = msg->longitudinal.speed;
-        if(joy_throttle_valid) {
-            k = 0.5 - 0.5 * joy_.axes[AXIS_THROTTLE];
+        float throttle_min = 0.15;
+        float throttle_max = 0.80;
+
+        // vehicle's maximum speed
+        float max_speed = 34; /* 122 km/h */
+        float desired_speed = msg->longitudinal.speed;
+        float normalized_speed = desired_speed / max_speed;
+
+        // Normalized speed to the range [throttle_min, throttle_max] of DBW System
+        float throttle_cmd = throttle_min + normalized_speed * (throttle_max - throttle_min);
+
+        // Adjust throttle command based on joystick input (if available)
+        if (joy_throttle_valid) {
+            float joy_modifier = 0.5 - 0.5 * joy_.axes[AXIS_THROTTLE];
+            throttle_cmd += joy_modifier;
         }
-        throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PERCENT;
+
+        // This ensures the throttle command is within the valid range [throttle_min, throttle_max]
+        throttle_cmd = std::clamp(throttle_cmd, throttle_min, throttle_max);
+
+        dbw_ford_msgs::msg::ThrottleCmd throttle_msg;
+        throttle_msg.pedal_cmd = throttle_cmd;
+        throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PEDAL;
         throttle_msg.enable = true;
-        throttle_msg.pedal_cmd = k * throttle_gain_; 
         throttle_publisher_->publish(throttle_msg);
 
         // Brake
+        float brake_gain_;
+        brake_gain_ = 1.0;
         float brake_value = msg->longitudinal.acceleration < 0 ? -msg->longitudinal.acceleration : 0;
         if(joy_brake_valid) {
             brake_value = 0.5 - 0.5 * joy_.axes[AXIS_BRAKE];
@@ -96,22 +110,47 @@ private:
             brake_msg.pedal_cmd = brake_value;
             brake_msg.pedal_cmd_type = dbw_ford_msgs::msg::BrakeCmd::CMD_PERCENT;
             brake_msg.enable = true;
-            brake_msg.pedal_cmd = brake_value * brake_gain_;
+            // brake_msg.pedal_cmd = brake_value * brake_gain_;
             brake_publisher_->publish(brake_msg);
         }
 
         // Steering
         dbw_ford_msgs::msg::SteeringCmd steering_msg;
-        steering_msg.steering_wheel_angle_cmd = msg->lateral.steering_tire_angle;
+        if (dummy_steering == 1.0){
+            steering_msg.steering_wheel_angle_cmd = 0.0;
+            dummy_steering = 2.0;
+        }          
+        // Mapping autoware steering rate (-1.0 to 1.0) into DBW steering range (-9.6 to 9.6 radians)
+        else{
+            cout<<"Steering Value:"<<5.5*msg->lateral.steering_tire_angle<<endl;
+            steering_msg.steering_wheel_angle_cmd = 5.5*msg->lateral.steering_tire_angle;
+        }
+
         if(joy_.axes.size() > AXIS_STEER) {
+            // Adjust the steering angle based on joystick input
             steering_msg.steering_wheel_angle_cmd += joy_.axes[AXIS_STEER];
         }
-        steering_msg.steering_wheel_angle_velocity = msg->lateral.steering_tire_rotation_rate;
+        
+        steering_msg.steering_wheel_angle_velocity = 0.0;
         steering_msg.cmd_type = dbw_ford_msgs::msg::SteeringCmd::CMD_ANGLE;
         steering_msg.enable = true;
         
         steering_publisher_->publish(steering_msg);
     }
+   
+    // float mapSteering(float autoware_steering_value)
+    // {
+        // Autoware steering range: [-1, 1]
+        // DBW steering range: [-9.6, 9.6] radians
+       
+        //float autoware_steering_min = -1.0;
+        //float autoware_steering_max = 1.0;
+        // float dbw_steering_min = -9.6;
+        // float dbw_steering_max = 9.6;
+
+        // Map the autoware_steering_value to the DBW steering range
+        // return ((autoware_steering_value + 1) / 2) * (dbw_steering_max - dbw_steering_min) + dbw_steering_min;
+    // }
 
    uint8_t translate_gear(uint8_t autoware_gear)
    {
@@ -161,8 +200,8 @@ private:
     {
         autoware_auto_vehicle_msgs::msg::SteeringReport aw_steering_report;
         aw_steering_report.stamp = msg->header.stamp;
-        aw_steering_report.steering_tire_angle = msg->steering_wheel_angle;
-        steering_report_publisher_->publish(aw_steering_report);
+        aw_steering_report.steering_tire_angle = (msg->steering_wheel_angle)/4.8;
+        // steering_report_publisher_->publish(aw_steering_report);
     }
 
     // Joystick callback
@@ -199,6 +238,6 @@ int main(int argc, char *argv[])
     rclcpp::init(argc, argv);
     auto node = std::make_shared<Lincoln_MKZ_Bridge>();
     rclcpp::spin(node);
-    rclcpp::shutdown();
+    // rclcpp::shutdown();
     return 0;
 }

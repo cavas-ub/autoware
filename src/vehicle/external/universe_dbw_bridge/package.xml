@@ -18,7 +18,12 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
+  <!-- Add config and launch directories -->
   <export>
     <build_type>ament_cmake</build_type>
+    <ros2>
+      <package>config</package>
+      <package>launch</package>
+    </ros2>
   </export>
 </package>

@@ -19,7 +19,11 @@ ament_target_dependencies(Lincoln_MKZ_Bridge rclcpp autoware_auto_vehicle_msgs a
 install(TARGETS
   Lincoln_MKZ_Bridge
   DESTINATION lib/${PROJECT_NAME})
-  
+
+# Install config and launch folders
+install(DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/parameter.hpp"
 #include "autoware_auto_vehicle_msgs/msg/gear_command.hpp"
 #include "autoware_auto_control_msgs/msg/ackermann_control_command.hpp"
 #include "autoware_auto_vehicle_msgs/msg/gear_report.hpp"
@@ -21,6 +22,33 @@ class Lincoln_MKZ_Bridge : public rclcpp::Node
 public:
     Lincoln_MKZ_Bridge() : Node("Lincoln_MKZ_Bridge")
     {   
+        rclcpp::Parameter max_speed_param, brake_gain_param, steering_gain_param;
+
+        this->declare_parameter<float>("Lincoln_Max_Speed", 34); // 122 km/h
+        this->declare_parameter<float>("Lincoln_Brake", 1.0);
+        this->declare_parameter<float>("Lincoln_Steering", 12.0);
+
+        max_speed_param = this->get_parameter("Lincoln_Max_Speed");
+        if (max_speed_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            max_speed = max_speed_param.as_double();
+        } else {
+            cout<<"Invalid type given! Check vehicle_params.yaml";
+        }
+
+        brake_gain_param = this->get_parameter("Lincoln_Brake");
+        if (brake_gain_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            brake_gain = brake_gain_param.as_double();
+        } else {
+            cout<<"Invalid type given! Check vehicle_params.yaml";
+        }
+
+        steering_gain_param = this->get_parameter("Lincoln_Steering");
+        if (steering_gain_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            steering_gain = steering_gain_param.as_double();
+        } else {
+            cout<<"Invalid type given! Check vehicle_params.yaml";
+        }
+
         //Output to DBW Node
         gear_publisher_ = this->create_publisher<dbw_ford_msgs::msg::GearCmd>("/vehicle/gear_cmd", 10);
         throttle_publisher_ = this->create_publisher<dbw_ford_msgs::msg::ThrottleCmd>("/vehicle/throttle_cmd", 10);
@@ -53,14 +81,19 @@ public:
 
 private:
 
-   // Joystick variables
-   sensor_msgs::msg::Joy joy_;
-   const size_t AXIS_THROTTLE = 1;
-   const size_t AXIS_BRAKE = 2;
-   const size_t AXIS_STEER = 3;
-   bool joy_throttle_valid = false;
-   bool joy_brake_valid = false;
-   float dummy_steering = 1.0;
+    // Joystick variables
+    sensor_msgs::msg::Joy joy_;
+    const size_t AXIS_THROTTLE = 1;
+    const size_t AXIS_BRAKE = 2;
+    const size_t AXIS_STEER = 3;
+    bool joy_throttle_valid = false;
+    bool joy_brake_valid = false;
+    float dummy_steering = 1.0;
+
+    // Lincoln variables
+    float max_speed;
+    float brake_gain;
+    float steering_gain;
 
    void gearCallback(const autoware_auto_vehicle_msgs::msg::GearCommand::SharedPtr msg)
    {
@@ -75,8 +108,6 @@ private:
         float throttle_min = 0.15;
         float throttle_max = 0.80;
 
-        // vehicle's maximum speed
-        float max_speed = 34; /* 122 km/h */
         float desired_speed = msg->longitudinal.speed;
         float normalized_speed = desired_speed / max_speed;
 
@@ -96,11 +127,9 @@ private:
         throttle_msg.pedal_cmd = throttle_cmd;
         throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PEDAL;
         throttle_msg.enable = true;
-        throttle_publisher_->publish(throttle_msg);
+        // throttle_publisher_->publish(throttle_msg);
 
         // Brake
-        float brake_gain_;
-        brake_gain_ = 1.0;
         float brake_value = msg->longitudinal.acceleration < 0 ? -msg->longitudinal.acceleration : 0;
         if(joy_brake_valid) {
             brake_value = 0.5 - 0.5 * joy_.axes[AXIS_BRAKE];
@@ -110,7 +139,7 @@ private:
             brake_msg.pedal_cmd = brake_value;
             brake_msg.pedal_cmd_type = dbw_ford_msgs::msg::BrakeCmd::CMD_PERCENT;
             brake_msg.enable = true;
-            // brake_msg.pedal_cmd = brake_value * brake_gain_;
+            // brake_msg.pedal_cmd = brake_value * brake_gain;
             brake_publisher_->publish(brake_msg);
         }
 
@@ -122,8 +151,8 @@ private:
         }          
         // Mapping autoware steering rate (-1.0 to 1.0) into DBW steering range (-9.6 to 9.6 radians)
         else{
-            cout<<"Steering Value:"<<5.5*msg->lateral.steering_tire_angle<<endl;
-            steering_msg.steering_wheel_angle_cmd = 5.5*msg->lateral.steering_tire_angle;
+            cout<<"Steering Value:"<<steering_gain*msg->lateral.steering_tire_angle<<endl;
+            steering_msg.steering_wheel_angle_cmd = steering_gain*msg->lateral.steering_tire_angle;
         }
 
         if(joy_.axes.size() > AXIS_STEER) {
@@ -200,7 +229,7 @@ private:
     {
         autoware_auto_vehicle_msgs::msg::SteeringReport aw_steering_report;
         aw_steering_report.stamp = msg->header.stamp;
-        aw_steering_report.steering_tire_angle = (msg->steering_wheel_angle)/4.8;
+        aw_steering_report.steering_tire_angle = (msg->steering_wheel_angle)/steering_gain;
         // steering_report_publisher_->publish(aw_steering_report);
     }
 

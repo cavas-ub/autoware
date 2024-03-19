@@ -127,7 +127,7 @@ private:
         throttle_msg.pedal_cmd = throttle_cmd;
         throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PEDAL;
         throttle_msg.enable = true;
-        // throttle_publisher_->publish(throttle_msg);
+        throttle_publisher_->publish(throttle_msg);
 
         // Brake
         float brake_value = msg->longitudinal.acceleration < 0 ? -msg->longitudinal.acceleration : 0;

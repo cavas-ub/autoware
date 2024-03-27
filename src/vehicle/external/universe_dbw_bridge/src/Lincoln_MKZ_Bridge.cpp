@@ -7,6 +7,7 @@
 #include "autoware_auto_control_msgs/msg/ackermann_control_command.hpp"
 #include "autoware_auto_vehicle_msgs/msg/gear_report.hpp"
 #include "autoware_auto_vehicle_msgs/msg/steering_report.hpp"
+#include "autoware_auto_vehicle_msgs/msg/velocity_report.hpp"
 
 #include "dbw_ford_msgs/msg/gear_cmd.hpp"
 #include "dbw_ford_msgs/msg/brake_cmd.hpp"
@@ -15,6 +16,8 @@
 #include "dbw_ford_msgs/msg/gear_report.hpp"
 #include "dbw_ford_msgs/msg/steering_report.hpp"
 #include "sensor_msgs/msg/joy.hpp"
+#include "geometry_msgs/msg/twist.hpp"
+
 using namespace std;
 
 class Lincoln_MKZ_Bridge : public rclcpp::Node
@@ -24,11 +27,11 @@ public:
     {   
         rclcpp::Parameter max_speed_param, brake_gain_param, steering_gain_param;
 
-        this->declare_parameter<float>("Lincoln_Max_Speed", 34); // 122 km/h
-        this->declare_parameter<float>("Lincoln_Brake", 1.0);
-        this->declare_parameter<float>("Lincoln_Steering", 12.0);
+        this->declare_parameter<float>("Lincoln_Speed");
+        this->declare_parameter<float>("Lincoln_Brake");
+        this->declare_parameter<float>("Lincoln_Steering");
 
-        max_speed_param = this->get_parameter("Lincoln_Max_Speed");
+        max_speed_param = this->get_parameter("Lincoln_Speed");
         if (max_speed_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
             max_speed = max_speed_param.as_double();
         } else {
@@ -49,25 +52,29 @@ public:
             cout<<"Invalid type given! Check vehicle_params.yaml";
         }
 
-        //Output to DBW Node
+        //To DBW Node
         gear_publisher_ = this->create_publisher<dbw_ford_msgs::msg::GearCmd>("/vehicle/gear_cmd", 10);
         throttle_publisher_ = this->create_publisher<dbw_ford_msgs::msg::ThrottleCmd>("/vehicle/throttle_cmd", 10);
         brake_publisher_ = this->create_publisher<dbw_ford_msgs::msg::BrakeCmd>("/vehicle/brake_cmd", 10);
         steering_publisher_ = this->create_publisher<dbw_ford_msgs::msg::SteeringCmd>("/vehicle/steering_cmd", 10);
 
-        //Output to Autoware
+        //To Autoware
         gear_report_publisher_ = this->create_publisher<autoware_auto_vehicle_msgs::msg::GearReport>("/vehicle/status/gear_status", 10);
         steering_report_publisher_ = this->create_publisher<autoware_auto_vehicle_msgs::msg::SteeringReport>("/vehicle/status/steering_status", 10);
+        vehicle_speed_publisher_ = this->create_publisher<autoware_auto_vehicle_msgs::msg::VelocityReport>("/vehicle/status/velocity_status", 10);
 
-        //Input from DBW Node
+        //From DBW Node
         gear_report_subscription_ = this->create_subscription<dbw_ford_msgs::msg::GearReport>(
             "/vehicle/gear_report", 10,
             std::bind(&Lincoln_MKZ_Bridge::gearReportCallback, this, std::placeholders::_1));
         steering_report_subscription_ = this->create_subscription<dbw_ford_msgs::msg::SteeringReport>(
             "/vehicle/steering_report", 10,
             std::bind(&Lincoln_MKZ_Bridge::steeringReportCallback, this, std::placeholders::_1));
+        vehicle_speed_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
+            "/vehicle/twist", 10,
+            std::bind(&Lincoln_MKZ_Bridge::vehicleTwistCallback, this, std::placeholders::_1));
 
-        //Input from Autoware    
+        //From Autoware    
         gear_subscription_ = this->create_subscription<autoware_auto_vehicle_msgs::msg::GearCommand>(
             "/control/command/gear_cmd", 10,
             std::bind(&Lincoln_MKZ_Bridge::gearCallback, this, std::placeholders::_1));
@@ -151,7 +158,7 @@ private:
         }          
         // Mapping autoware steering rate (-1.0 to 1.0) into DBW steering range (-9.6 to 9.6 radians)
         else{
-            cout<<"Steering Value:"<<steering_gain*msg->lateral.steering_tire_angle<<endl;
+            // cout<<"Steering Value:"<<steering_gain*msg->lateral.steering_tire_angle<<endl;
             steering_msg.steering_wheel_angle_cmd = steering_gain*msg->lateral.steering_tire_angle;
         }
 
@@ -233,6 +240,23 @@ private:
         // steering_report_publisher_->publish(aw_steering_report);
     }
 
+    void vehicleTwistCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
+    {
+        float longitudinal_velocity = msg->linear.x;
+        float lateral_velocity = msg->linear.y;
+        float angular_velocity = msg->angular.z;
+        cout << "Vehicle Speed: " << longitudinal_velocity * 3.6 << " km/h" << endl;
+
+        autoware_auto_vehicle_msgs::msg::VelocityReport velocity_msg;
+        velocity_msg.header.stamp = this->now();
+        velocity_msg.longitudinal_velocity = longitudinal_velocity;
+        velocity_msg.lateral_velocity = lateral_velocity;
+        velocity_msg.heading_rate = angular_velocity;
+
+        vehicle_speed_publisher_->publish(velocity_msg);
+    }
+
+
     // Joystick callback
     void recvJoy(const sensor_msgs::msg::Joy::ConstSharedPtr msg) 
     {
@@ -252,6 +276,8 @@ private:
     rclcpp::Subscription<dbw_ford_msgs::msg::GearReport>::SharedPtr gear_report_subscription_;
     rclcpp::Subscription<dbw_ford_msgs::msg::SteeringReport>::SharedPtr steering_report_subscription_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vehicle_speed_subscription_;
+
 
     rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::SteeringReport>::SharedPtr steering_report_publisher_;
     rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::GearReport>::SharedPtr gear_report_publisher_;
@@ -259,6 +285,8 @@ private:
     rclcpp::Publisher<dbw_ford_msgs::msg::ThrottleCmd>::SharedPtr throttle_publisher_;
     rclcpp::Publisher<dbw_ford_msgs::msg::BrakeCmd>::SharedPtr brake_publisher_;
     rclcpp::Publisher<dbw_ford_msgs::msg::SteeringCmd>::SharedPtr steering_publisher_;
+    rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::VelocityReport>::SharedPtr vehicle_speed_publisher_;
+
 
 };
 

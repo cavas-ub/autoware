@@ -11,10 +11,11 @@ find_package(rclcpp REQUIRED)
 find_package(autoware_auto_vehicle_msgs REQUIRED)
 find_package(autoware_auto_control_msgs REQUIRED)
 find_package(dbw_ford_msgs REQUIRED)
+find_package(dataspeed_ulc_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 add_executable(Lincoln_MKZ_Bridge src/Lincoln_MKZ_Bridge.cpp)
-ament_target_dependencies(Lincoln_MKZ_Bridge rclcpp autoware_auto_vehicle_msgs autoware_auto_control_msgs dbw_ford_msgs sensor_msgs)
+ament_target_dependencies(Lincoln_MKZ_Bridge rclcpp autoware_auto_vehicle_msgs autoware_auto_control_msgs dbw_ford_msgs dataspeed_ulc_msgs sensor_msgs)
 
 install(TARGETS
   Lincoln_MKZ_Bridge

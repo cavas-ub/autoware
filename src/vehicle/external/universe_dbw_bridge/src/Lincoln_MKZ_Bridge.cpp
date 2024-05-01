@@ -1,22 +1,19 @@
-// Author: DeeKay Goswami
-
 #include <iostream>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/parameter.hpp"
-#include "autoware_auto_vehicle_msgs/msg/gear_command.hpp"
-#include "autoware_auto_control_msgs/msg/ackermann_control_command.hpp"
+#include "sensor_msgs/msg/joy.hpp"
 #include "autoware_auto_vehicle_msgs/msg/gear_report.hpp"
+#include "autoware_auto_vehicle_msgs/msg/gear_command.hpp"
 #include "autoware_auto_vehicle_msgs/msg/steering_report.hpp"
 #include "autoware_auto_vehicle_msgs/msg/velocity_report.hpp"
+#include "autoware_auto_control_msgs/msg/ackermann_control_command.hpp"
 
 #include "dbw_ford_msgs/msg/gear_cmd.hpp"
-#include "dbw_ford_msgs/msg/brake_cmd.hpp"
-#include "dbw_ford_msgs/msg/throttle_cmd.hpp"
-#include "dbw_ford_msgs/msg/steering_cmd.hpp"
 #include "dbw_ford_msgs/msg/gear_report.hpp"
+#include "dbw_ford_msgs/msg/steering_cmd.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include "dbw_ford_msgs/msg/steering_report.hpp"
-#include "sensor_msgs/msg/joy.hpp"
-#include "geometry_msgs/msg/twist.hpp"
+#include <dataspeed_ulc_msgs/msg/ulc_cmd.hpp>
 
 using namespace std;
 
@@ -25,22 +22,14 @@ class Lincoln_MKZ_Bridge : public rclcpp::Node
 public:
     Lincoln_MKZ_Bridge() : Node("Lincoln_MKZ_Bridge")
     {   
-        rclcpp::Parameter max_speed_param, brake_gain_param, steering_gain_param;
+        rclcpp::Parameter wheel_base_param, steering_gain_param;
 
-        this->declare_parameter<float>("Lincoln_Speed");
-        this->declare_parameter<float>("Lincoln_Brake");
+        this->declare_parameter<float>("Lincoln_Wheel_Base");
         this->declare_parameter<float>("Lincoln_Steering");
 
-        max_speed_param = this->get_parameter("Lincoln_Speed");
-        if (max_speed_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-            max_speed = max_speed_param.as_double();
-        } else {
-            cout<<"Invalid type given! Check vehicle_params.yaml";
-        }
-
-        brake_gain_param = this->get_parameter("Lincoln_Brake");
-        if (brake_gain_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-            brake_gain = brake_gain_param.as_double();
+        wheel_base_param = this->get_parameter("Lincoln_Wheel_Base");
+        if (wheel_base_param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            wheel_base = wheel_base_param.as_double();
         } else {
             cout<<"Invalid type given! Check vehicle_params.yaml";
         }
@@ -54,9 +43,8 @@ public:
 
         //To DBW Node
         gear_publisher_ = this->create_publisher<dbw_ford_msgs::msg::GearCmd>("/vehicle/gear_cmd", 10);
-        throttle_publisher_ = this->create_publisher<dbw_ford_msgs::msg::ThrottleCmd>("/vehicle/throttle_cmd", 10);
-        brake_publisher_ = this->create_publisher<dbw_ford_msgs::msg::BrakeCmd>("/vehicle/brake_cmd", 10);
         steering_publisher_ = this->create_publisher<dbw_ford_msgs::msg::SteeringCmd>("/vehicle/steering_cmd", 10);
+        ulc_publisher = this->create_publisher<dataspeed_ulc_msgs::msg::UlcCmd>("/vehicle/ulc_cmd", 10);
 
         //To Autoware
         gear_report_publisher_ = this->create_publisher<autoware_auto_vehicle_msgs::msg::GearReport>("/vehicle/status/gear_status", 10);
@@ -70,7 +58,7 @@ public:
         steering_report_subscription_ = this->create_subscription<dbw_ford_msgs::msg::SteeringReport>(
             "/vehicle/steering_report", 10,
             std::bind(&Lincoln_MKZ_Bridge::steeringReportCallback, this, std::placeholders::_1));
-        vehicle_speed_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
+        vehicle_speed_subscription_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
             "/vehicle/twist", 10,
             std::bind(&Lincoln_MKZ_Bridge::vehicleTwistCallback, this, std::placeholders::_1));
 
@@ -98,9 +86,9 @@ private:
     float dummy_steering = 1.0;
 
     // Lincoln variables
-    float max_speed;
-    float brake_gain;
     float steering_gain;
+    float curr_steer;
+    float wheel_base;
 
    void gearCallback(const autoware_auto_vehicle_msgs::msg::GearCommand::SharedPtr msg)
    {
@@ -111,44 +99,23 @@ private:
 
    void controlCallback(const autoware_auto_control_msgs::msg::AckermannControlCommand::SharedPtr msg)
     {
-        // Throttle
-        float throttle_min = 0.15;
-        float throttle_max = 0.80;
+        // Throttle & Brake
+        dataspeed_ulc_msgs::msg::UlcCmd ulc_publisher_;
+        ctrl_time = this->now();
+        ulc_publisher_.header.stamp = get_clock()->now();
+        ulc_publisher_.pedals_mode = dataspeed_ulc_msgs::msg::UlcCmd::SPEED_MODE;
+        ulc_publisher_.linear_velocity = msg->longitudinal.speed;
 
-        float desired_speed = msg->longitudinal.speed;
-        float normalized_speed = desired_speed / max_speed;
+        ulc_publisher_.clear = false;
+        ulc_publisher_.enable_pedals = true;
+        ulc_publisher_.linear_accel = 0;
+        ulc_publisher_.linear_decel = 0;
+        ulc_publisher_.angular_accel = 0;
+        ulc_publisher_.lateral_accel = 0;
+        ulc_publisher_.jerk_limit_throttle=0;
+        ulc_publisher_.jerk_limit_brake=0;
 
-        // Normalized speed to the range [throttle_min, throttle_max] of DBW System
-        float throttle_cmd = throttle_min + normalized_speed * (throttle_max - throttle_min);
-
-        // Adjust throttle command based on joystick input (if available)
-        if (joy_throttle_valid) {
-            float joy_modifier = 0.5 - 0.5 * joy_.axes[AXIS_THROTTLE];
-            throttle_cmd += joy_modifier;
-        }
-
-        // This ensures the throttle command is within the valid range [throttle_min, throttle_max]
-        throttle_cmd = std::clamp(throttle_cmd, throttle_min, throttle_max);
-
-        dbw_ford_msgs::msg::ThrottleCmd throttle_msg;
-        throttle_msg.pedal_cmd = throttle_cmd;
-        throttle_msg.pedal_cmd_type = dbw_ford_msgs::msg::ThrottleCmd::CMD_PEDAL;
-        throttle_msg.enable = true;
-        throttle_publisher_->publish(throttle_msg);
-
-        // Brake
-        float brake_value = msg->longitudinal.acceleration < 0 ? -msg->longitudinal.acceleration : 0;
-        if(joy_brake_valid) {
-            brake_value = 0.5 - 0.5 * joy_.axes[AXIS_BRAKE];
-        }
-        if(brake_value > 0) {
-            dbw_ford_msgs::msg::BrakeCmd brake_msg;
-            brake_msg.pedal_cmd = brake_value;
-            brake_msg.pedal_cmd_type = dbw_ford_msgs::msg::BrakeCmd::CMD_PERCENT;
-            brake_msg.enable = true;
-            // brake_msg.pedal_cmd = brake_value * brake_gain;
-            brake_publisher_->publish(brake_msg);
-        }
+        ulc_publisher->publish(ulc_publisher_);
 
         // Steering
         dbw_ford_msgs::msg::SteeringCmd steering_msg;
@@ -173,20 +140,6 @@ private:
         
         steering_publisher_->publish(steering_msg);
     }
-   
-    // float mapSteering(float autoware_steering_value)
-    // {
-        // Autoware steering range: [-1, 1]
-        // DBW steering range: [-9.6, 9.6] radians
-       
-        //float autoware_steering_min = -1.0;
-        //float autoware_steering_max = 1.0;
-        // float dbw_steering_min = -9.6;
-        // float dbw_steering_max = 9.6;
-
-        // Map the autoware_steering_value to the DBW steering range
-        // return ((autoware_steering_value + 1) / 2) * (dbw_steering_max - dbw_steering_min) + dbw_steering_min;
-    // }
 
    uint8_t translate_gear(uint8_t autoware_gear)
    {
@@ -236,26 +189,26 @@ private:
     {
         autoware_auto_vehicle_msgs::msg::SteeringReport aw_steering_report;
         aw_steering_report.stamp = msg->header.stamp;
-        aw_steering_report.steering_tire_angle = (msg->steering_wheel_angle)/steering_gain;
-        // steering_report_publisher_->publish(aw_steering_report);
+        curr_steer = msg->steering_wheel_angle;
+        aw_steering_report.steering_tire_angle = curr_steer / steering_gain;
+        steering_report_publisher_->publish(aw_steering_report);
     }
 
-    void vehicleTwistCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
+    void vehicleTwistCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
     {
-        float longitudinal_velocity = msg->linear.x;
-        float lateral_velocity = msg->linear.y;
-        float angular_velocity = msg->angular.z;
-        cout << "Vehicle Speed: " << longitudinal_velocity * 3.6 << " km/h" << endl;
+        float longitudinal_velocity = msg->twist.linear.x;
+        float lateral_velocity = msg->twist.linear.y;
+        cout << "Vehicle Speed: " << longitudinal_velocity * 3.6f << " km/h" << endl;
 
         autoware_auto_vehicle_msgs::msg::VelocityReport velocity_msg;
         velocity_msg.header.stamp = this->now();
         velocity_msg.longitudinal_velocity = longitudinal_velocity;
         velocity_msg.lateral_velocity = lateral_velocity;
-        velocity_msg.heading_rate = angular_velocity;
+        velocity_msg.heading_rate = longitudinal_velocity * std::tan(curr_steer) / wheel_base;
+
 
         vehicle_speed_publisher_->publish(velocity_msg);
     }
-
 
     // Joystick callback
     void recvJoy(const sensor_msgs::msg::Joy::ConstSharedPtr msg) 
@@ -276,16 +229,16 @@ private:
     rclcpp::Subscription<dbw_ford_msgs::msg::GearReport>::SharedPtr gear_report_subscription_;
     rclcpp::Subscription<dbw_ford_msgs::msg::SteeringReport>::SharedPtr steering_report_subscription_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vehicle_speed_subscription_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr vehicle_speed_subscription_;
 
 
     rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::SteeringReport>::SharedPtr steering_report_publisher_;
     rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::GearReport>::SharedPtr gear_report_publisher_;
     rclcpp::Publisher<dbw_ford_msgs::msg::GearCmd>::SharedPtr gear_publisher_;
-    rclcpp::Publisher<dbw_ford_msgs::msg::ThrottleCmd>::SharedPtr throttle_publisher_;
-    rclcpp::Publisher<dbw_ford_msgs::msg::BrakeCmd>::SharedPtr brake_publisher_;
     rclcpp::Publisher<dbw_ford_msgs::msg::SteeringCmd>::SharedPtr steering_publisher_;
+    rclcpp::Publisher<dataspeed_ulc_msgs::msg::UlcCmd>::SharedPtr ulc_publisher;
     rclcpp::Publisher<autoware_auto_vehicle_msgs::msg::VelocityReport>::SharedPtr vehicle_speed_publisher_;
+    rclcpp::Time ctrl_time;
 
 
 };
